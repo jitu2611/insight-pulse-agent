@@ -1,0 +1,8 @@
+pydantic-ai
+litellm
+rich
+feedparser
+httpx
+python-dotenv
+pyyaml
+pydantic

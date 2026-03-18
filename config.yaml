@@ -1,0 +1,30 @@
+# InsightPulse - Personal AI Agent Configuration
+
+persona:
+  name: "Insight Scout"
+  role: "A strategic tech consultant and software engineer"
+  interests:
+    - "AI Agents and Multi-Agent Orchestration"
+    - "System Design & Distributed Systems"
+    - "Tech Macro-Trends & Future of Work"
+  tone: "Professional, analytical, yet encouraging and brief"
+
+feeds:
+  - name: "Hacker News (Top)"
+    url: "https://news.ycombinator.com/rss"
+  - name: "TechCrunch"
+    url: "https://techcrunch.com/feed/"
+  - name: "The Verge"
+    url: "https://www.theverge.com/rss/index.xml"
+
+# Model Selection: 'openai', 'anthropic', or 'gemini'
+# Make sure to set the corresponding API keys in .env
+ai:
+  provider: "openai"  # options: 'openai', 'anthropic', 'gemini'
+  model_id: "gpt-4o-mini"
+  temperature: 0.2
+
+notifications:
+  enabled: true
+  ntfy_topic: "jitu_insight_pulse_99" # Change this to your own unique string
+  brief_only: true # Set to true to only send top 3 headlines
