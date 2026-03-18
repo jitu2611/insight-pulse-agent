@@ -1,18 +1,18 @@
-import litellm
-import logging
 import os
+import json
+import random
+import logging
+import httpx
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from .config import config
 
-# LiteLLM Setup
-# This allows us to use gpt-4o, claude-3-5, gemini-1.5-pro, etc.
-# By default, LiteLLM pulls keys from environment variables like OPENAI_API_KEY, etc.
+logger = logging.getLogger(__name__)
 
 class Insight(BaseModel):
-    why_it_matters: str = Field(description="Why this article is relevant to the persona's interests and role.")
-    actionable_insight: str = Field(description="A suggested action or specific thing to investigate further.")
-    relevance_score: int = Field(ge=0, le=10, description="Rate relevance from 0-10.")
+    why_it_matters: str
+    actionable_insight: str
+    relevance_score: int
 
 class AnalyzedArticle(BaseModel):
     title: str
@@ -20,23 +20,12 @@ class AnalyzedArticle(BaseModel):
     source: str
     insight: Insight
 
-def get_model_name() -> str:
-    # Map friendly provider names to LiteLLM standard names
-    provider = config.ai.provider.lower()
-    model_id = config.ai.model_id
-    
-    if provider == "openai":
-        return f"openai/{model_id}"
-    elif provider == "anthropic":
-        return f"anthropic/{model_id}"
-    elif provider == "gemini":
-        return f"gemini/{model_id}"
-    return f"{provider}/{model_id}"
-
 class InsightAgent:
     def __init__(self):
-        self.model = get_model_name()
         self.persona = config.persona
+        self.provider = config.ai.provider.lower()
+        self.model = config.ai.model_id
+        
         self.system_prompt = f"""
         You are {self.persona.name}, acting as {self.persona.role}.
         Your interests are: {', '.join(self.persona.interests)}.
@@ -44,54 +33,99 @@ class InsightAgent:
         
         Analyze the provided news article and explain why it matters to you specifically.
         Be brief, insightful, and strategic.
-        If an article is completely irrelevant to your persona, give it a relevance_score of 0.
+        
+        Output MUST be in JSON format with these exact keys:
+        - "why_it_matters": (string)
+        - "actionable_insight": (string)
+        - "relevance_score": (integer 0-10)
         """
-        
-    def analyze_article(self, article_title: str, article_summary: str) -> Optional[Insight]:
-        """Analyze a single article using the chosen LLM via LiteLLM."""
-        
-        # Check if any relevant API key is present for the chosen provider
-        provider = config.ai.provider.lower()
-        key_env_map = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "gemini": "GOOGLE_API_KEY"}
-        
-        # Mock mode if no key (so user can see UI work)
-        if not os.getenv(key_env_map.get(provider, "")):
-            import random
-            mock_insights = [
-                Insight(
-                    why_it_matters="This article shows a clear trend in AI agent autonomy.",
-                    actionable_insight="Review the repo linked in the article for architectural patterns.",
-                    relevance_score=random.randint(4, 9)
-                ),
-                Insight(
-                    why_it_matters="A strategic shift for distributed systems architecture.",
-                    actionable_insight="Consider how this applies to our current multi-agent scaling problems.",
-                    relevance_score=random.randint(3, 8)
-                )
-            ]
-            return random.choice(mock_insights)
 
-        user_content = f"Title: {article_title}\n\nSummary: {article_summary}"
+    def analyze_article(self, article_title: str, article_summary: str) -> Optional[Insight]:
+        """Analyze an article using raw HTTP requests to OpenAI/Anthropic/Gemini."""
         
-        try:
-            # Using LiteLLM's structured output capability
-            response = litellm.completion(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": user_content}
-                ],
-                max_tokens=500,
-                temperature=config.ai.temperature,
-                response_format=Insight
+        # 1. Check for API key and handle Mock Mode
+        key_map = {
+            "openai": "OPENAI_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY",
+            "gemini": "GOOGLE_API_KEY"
+        }
+        api_key = os.getenv(key_map.get(self.provider, ""))
+        
+        if not api_key:
+            # Mock Insights for UI visualization
+            return Insight(
+                why_it_matters="This article highlights a major shift in modern engineering practices.",
+                actionable_insight="Benchmark current project workflows against these new findings.",
+                relevance_score=random.randint(4, 9)
             )
-            
-            # Simple manual parse if the response_format isn't supported by the specific model
-            # but LiteLLM handles this for most major providers
-            import json
-            content = response.choices[0].message.content
-            return Insight.model_validate_json(content)
-            
+
+        # 2. Prepare Payload based on provider
+        try:
+            if self.provider == "openai":
+                return self._call_openai(api_key, article_title, article_summary)
+            elif self.provider == "anthropic":
+                return self._call_anthropic(api_key, article_title, article_summary)
+            elif self.provider == "gemini":
+                return self._call_gemini(api_key, article_title, article_summary)
         except Exception as e:
-            logging.error(f"Error in AI analysis: {e}")
+            logger.error(f"API Error ({self.provider}): {e}")
             return None
+            
+        return None
+
+    def _call_openai(self, key, title, summary):
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": f"Title: {title}\nSummary: {summary}"}
+            ],
+            "response_format": {"type": "json_object"}
+        }
+        with httpx.Client() as client:
+            resp = client.post(url, headers=headers, json=payload, timeout=30.0)
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"]
+            return Insight.model_validate_json(content)
+
+    def _call_anthropic(self, key, title, summary):
+        url = "https://api.anthropic.com/v1/messages"
+        headers = {
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
+        payload = {
+            "model": self.model,
+            "max_tokens": 512,
+            "system": self.system_prompt,
+            "messages": [
+                {"role": "user", "content": f"Analyze this article and return ONLY JSON:\nTitle: {title}\nSummary: {summary}"}
+            ]
+        }
+        with httpx.Client() as client:
+            resp = client.post(url, headers=headers, json=payload, timeout=30.0)
+            data = resp.json()
+            content = data["content"][0]["text"]
+            # Clean up potential markdown code blocks if the model puts them in
+            if content.startswith("```json"):
+                content = content[7:-3].strip()
+            return Insight.model_validate_json(content)
+
+    def _call_gemini(self, key, title, summary):
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={key}"
+        payload = {
+            "contents": [{
+                "parts": [{"text": f"{self.system_prompt}\n\nAnalyze this article:\nTitle: {title}\nSummary: {summary}"}]
+            }],
+            "generationConfig": {
+                "response_mime_type": "application/json",
+            }
+        }
+        with httpx.Client() as client:
+            resp = client.post(url, json=payload, timeout=30.0)
+            data = resp.json()
+            content = data["candidates"][0]["content"]["parts"][0]["text"]
+            return Insight.model_validate_json(content)
