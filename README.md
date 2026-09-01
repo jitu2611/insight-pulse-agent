@@ -4,6 +4,10 @@
 
 ---
 
+## 🏗️ How it works
+
+![InsightPulse processing flow](docs/insight-pulse-flow.svg)
+
 ## ✨ Features
 
 *   **👤 Persona-Driven Reasoning:** Define your role, interests, and tone in `config.yaml`. The agent filters and analyzes news accordingly.
